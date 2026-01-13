@@ -25,27 +25,29 @@
         } \
     } while(0)
 
+// Constants
 const int HIDDEN = 4096;
 const int INTER = 12288;
 
+// Global State
 cublasLtHandle_t ltHandle;
 cublasLtMatmulPreference_t preference;
 bool initialized = false;
 bool algos_found = false;
 
-//gpu pointers
+// Device Pointers
 __half *W_combined = nullptr;
 __half *Wo = nullptr;
-__half *d_u = nullptr;
-__half *d_h = nullptr;
+__half *d_u = nullptr; // Intermediate for GeGLU (2 * INTER)
+__half *d_h = nullptr; // After GeGLU (INTER)
 void* workspace = nullptr;
-size_t workspaceSize = 1024 * 1024 * 32; //32 mb workspace
+size_t workspaceSize = 1024 * 1024 * 32; // 32MB workspace
 
 cublasLtMatmulAlgo_t algo_gemm1;
 cublasLtMatmulAlgo_t algo_gemm2;
 
-
-__global__ void geglu_kernel(
+// --- Optimized GeGLU Kernel using __half2 ---
+__global__ void geglu_fast_kernel_optimized(
     const __half2* __restrict__ input, 
     __half2* __restrict__ output, 
     int iter_size_h2, 
@@ -76,8 +78,8 @@ __global__ void geglu_kernel(
     }
 }
 
-//helper to init weights on device
-__global__ void init_kernel(__half* data, size_t size, float seed) {
+// Helper to init weights on GPU
+__global__ void simple_init_kernel(__half* data, size_t size, float seed) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         data[idx] = __float2half(sinf(idx + seed) * 0.01f);
@@ -87,10 +89,18 @@ __global__ void init_kernel(__half* data, size_t size, float seed) {
 void random_init(__half* data, size_t size) {
     int threads = 256;
     int blocks = (size + threads - 1) / threads;
-    init_kernel<<<blocks, threads>>>(data, size, (float)rand());
+    simple_init_kernel<<<blocks, threads>>>(data, size, (float)rand());
 }
 
-void find_best_algo(cublasLtMatmulDesc_t operationDesc, cublasLtMatrixLayout_t Adesc, cublasLtMatrixLayout_t Bdesc, cublasLtMatrixLayout_t Cdesc, const void* alpha, const void* beta, const void* A, const void* B, void* C, cublasLtMatmulAlgo_t& bestAlgo) {
+void find_best_algo(
+    cublasLtMatmulDesc_t operationDesc,
+    cublasLtMatrixLayout_t Adesc,
+    cublasLtMatrixLayout_t Bdesc,
+    cublasLtMatrixLayout_t Cdesc,
+    const void* alpha, const void* beta,
+    const void* A, const void* B, void* C,
+    cublasLtMatmulAlgo_t& bestAlgo
+) {
     int returnedResults = 0;
     const int max_algos = 10;
     cublasLtMatmulHeuristicResult_t heuristicResults[max_algos];
@@ -126,10 +136,8 @@ void initialize_once() {
     initialized = true;
 }
 
-void geglu(const __half* x, __half* out, int B) {
-    if (!initialized) {
-        initialize_once();
-    }
+void geglu_cublaslt(const __half* x, __half* out, int B) {
+    if (!initialized) initialize_once();
 
     float alpha = 1.0f;
     float beta = 0.0f;
@@ -152,7 +160,8 @@ void geglu(const __half* x, __half* out, int B) {
 
     CUBLAS_CHECK(cublasLtMatmul(
         ltHandle, opDesc, &alpha, W_combined, wDesc, x, xDesc, &beta, d_u, uDesc, d_u, uDesc, 
-        &algo_gemm1, workspace, workspaceSize, 0));
+        &algo_gemm1, workspace, workspaceSize, 0
+    ));
 
     // --- Optimized GeGLU Element-wise ---
     int iter_size_h2 = INTER / 2;
@@ -160,7 +169,7 @@ void geglu(const __half* x, __half* out, int B) {
     dim3 threads(256);
     dim3 blocks((iter_size_h2 + threads.x - 1) / threads.x, B);
 
-    geglu_kernel<<<blocks, threads>>>(
+    geglu_fast_kernel_optimized<<<blocks, threads>>>(
         (const __half2*)d_u, (__half2*)d_h, iter_size_h2, batch_stride_h2
     );
 
@@ -182,20 +191,58 @@ void geglu(const __half* x, __half* out, int B) {
 
     // Cleanup Descriptors
     cublasLtMatmulDescDestroy(opDesc);
-    cublasLtMatrixLayoutDestroy(xDesc); 
-    cublasLtMatrixLayoutDestroy(wDesc); 
-    cublasLtMatrixLayoutDestroy(uDesc);
-    cublasLtMatrixLayoutDestroy(hDesc); 
-    cublasLtMatrixLayoutDestroy(woDesc); 
-    cublasLtMatrixLayoutDestroy(outDesc);
+    cublasLtMatrixLayoutDestroy(xDesc); cublasLtMatrixLayoutDestroy(wDesc); cublasLtMatrixLayoutDestroy(uDesc);
+    cublasLtMatrixLayoutDestroy(hDesc); cublasLtMatrixLayoutDestroy(woDesc); cublasLtMatrixLayoutDestroy(outDesc);
 }
 
-void cleanup() {
-    CUDA_CHECK(cudaFree(W_combined));
-    CUDA_CHECK(cudaFree(Wo));
-    CUDA_CHECK(cudaFree(d_u));
-    CUDA_CHECK(cudaFree(d_h));
+int main() {
+    initialize_once();
+    int warmup = 100;
+    int batch_sizes[] = {4, 8, 16, 32, 64, 128};
+    const int NUM_RUNS = 100;
+    
+    __half *d_x, *d_out;
+    CUDA_CHECK(cudaMalloc(&d_x, 128 * HIDDEN * sizeof(__half)));
+    CUDA_CHECK(cudaMalloc(&d_out, 128 * HIDDEN * sizeof(__half)));
+
+    random_init(W_combined, HIDDEN * (2 * INTER));
+    random_init(Wo, INTER * HIDDEN);
+
+    printf("GEGLU FFN BENCHMARK (Optimized)\n");
+    printf("----------------------------------\n");
+
+    for (int B : batch_sizes) {
+        random_init(d_x, B * HIDDEN);
+
+        // Warmup
+        for(int i = 0; i < warmup; i++) geglu_cublaslt(d_x, d_out, B);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        cudaEvent_t start, stop;
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+
+        CUDA_CHECK(cudaEventRecord(start));
+        for (int i = 0; i < NUM_RUNS; i++) {
+            geglu_cublaslt(d_x, d_out, B);
+        }
+        CUDA_CHECK(cudaEventRecord(stop));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+
+        float ms = 0;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+        printf("Batch Size: %3d | Avg Time: %8.5f ms\n", B, ms / NUM_RUNS);
+
+        cudaEventDestroy(start); cudaEventDestroy(stop);
+    }
+
+    // Cleanup
+    CUDA_CHECK(cudaFree(d_x)); CUDA_CHECK(cudaFree(d_out));
+    CUDA_CHECK(cudaFree(W_combined)); CUDA_CHECK(cudaFree(Wo));
+    CUDA_CHECK(cudaFree(d_u)); CUDA_CHECK(cudaFree(d_h));
     CUDA_CHECK(cudaFree(workspace));
     CUBLAS_CHECK(cublasLtMatmulPreferenceDestroy(preference));
     CUBLAS_CHECK(cublasLtDestroy(ltHandle));
+    
+    return 0;
 }

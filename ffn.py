@@ -13,7 +13,7 @@ class GEGLU_FFN(nn.Module):
     def forward(self, x):
         u = self.Wu(x)      # (B, 12288)
         v = self.Wv(x)      # (B, 12288)
-        g = F.gelu(u, approximate='tanh')  # (B, 12288)
+        g = F.gelu(u)  # (B, 12288)
         h = g * v
         return self.Wo(h)   # (B, 4096)
 
