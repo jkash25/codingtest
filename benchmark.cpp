@@ -3,7 +3,6 @@
 #include <cstdio>
 #include "ffn.h"
 
-// Macro for error checking (matches your kernel file)
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t error = call; \
@@ -25,16 +24,15 @@
 
 int main() {
     initialize_once();
-    int warmup = 100;
+    int warmup = 5;
     int batch_sizes[] = {4, 8, 16, 32, 64, 128};
-    const int NUM_RUNS = 100;
+    const int NUM_RUNS = 50;
     const int HIDDEN = 4096;
     const int INTER = 12288;
     __half *d_x, *d_out;
     CUDA_CHECK(cudaMalloc(&d_x, 128 * HIDDEN * sizeof(__half)));
     CUDA_CHECK(cudaMalloc(&d_out, 128 * HIDDEN * sizeof(__half)));
 
-    // These now point to the actual pointers inside kernel.cu via ffn.h
     random_init(W_combined, HIDDEN * (2 * INTER));
     random_init(Wo, INTER * HIDDEN);
 
@@ -44,7 +42,7 @@ int main() {
     for (int B : batch_sizes) {
         random_init(d_x, B * HIDDEN);
 
-        // Warmup
+        //warmup
         for(int i = 0; i < warmup; i++) {
             geglu(d_x, d_out, B);
         }
@@ -67,8 +65,6 @@ int main() {
 
         cudaEventDestroy(start); cudaEventDestroy(stop);
     }
-
-    // Cleanup - Using the variables shared via ffn.h
     CUDA_CHECK(cudaFree(d_x)); CUDA_CHECK(cudaFree(d_out));
     CUDA_CHECK(cudaFree(W_combined)); CUDA_CHECK(cudaFree(Wo));
     CUDA_CHECK(cudaFree(d_u)); CUDA_CHECK(cudaFree(d_h));

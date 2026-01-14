@@ -55,13 +55,11 @@ __global__ void geglu_kernel(
     int batch_idx = blockIdx.y;
     
     if (idx < iter_size_h2) {
-        // Load two elements from the "value" part and two from the "gate" part
-        // d_u layout for one batch is [Value (INTER) | Gate (INTER)]
         int base_offset = batch_idx * batch_stride_h2;
         __half2 val = input[base_offset + idx];
         __half2 gate = input[base_offset + iter_size_h2 + idx];
         
-        // Approximate GeLU logic: x * sigmoid(1.702 * x)
+        //approximate gelu x * sigmoid(1.702 * x)
         const __half2 k1 = __float2half2_rn(1.702f);
         const __half2 kOne = __float2half2_rn(1.0f);
         
@@ -71,7 +69,7 @@ __global__ void geglu_kernel(
         __half2 denom = __hadd2(kOne, exp_val);
         __half2 sigmoid_g = h2rcp(denom);
         
-        // Final GeGLU: val * sigmoid(gate)
+        //geglu: val * sigmoid(gate)
         output[batch_idx * iter_size_h2 + idx] = __hmul2(val, sigmoid_g);
     }
 }
@@ -134,7 +132,7 @@ void geglu(const __half* x, __half* out, int B) {
     float alpha = 1.0f;
     float beta = 0.0f;
 
-    // --- GEMM 1: X [B, HIDDEN] @ W [HIDDEN, 2*INTER] ---
+    //gemm 1: (b, hidden) @ (hidden, 2*inter)
     cublasLtMatmulDesc_t opDesc;
     CUBLAS_CHECK(cublasLtMatmulDescCreate(&opDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F));
     cublasOperation_t opN = CUBLAS_OP_N;
@@ -154,7 +152,7 @@ void geglu(const __half* x, __half* out, int B) {
         ltHandle, opDesc, &alpha, W_combined, wDesc, x, xDesc, &beta, d_u, uDesc, d_u, uDesc, 
         &algo_gemm1, workspace, workspaceSize, 0));
 
-    // --- Optimized GeGLU Element-wise ---
+    //
     int iter_size_h2 = INTER / 2;
     int batch_stride_h2 = (2 * INTER) / 2;
     dim3 threads(256);
@@ -164,7 +162,7 @@ void geglu(const __half* x, __half* out, int B) {
         (const __half2*)d_u, (__half2*)d_h, iter_size_h2, batch_stride_h2
     );
 
-    // --- GEMM 2: GeGLU_Out [B, INTER] @ Wo [INTER, HIDDEN] ---
+    //gemm 2: (B, Inter) @ (inter, hidden)
     cublasLtMatrixLayout_t hDesc, woDesc, outDesc;
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&hDesc, CUDA_R_16F, INTER, B, INTER));
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&woDesc, CUDA_R_16F, HIDDEN, INTER, HIDDEN));

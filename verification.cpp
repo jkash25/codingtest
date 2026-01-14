@@ -16,7 +16,7 @@ int main() {
     const int INTER = 12288;
     initialize_once();
     
-    int B = 4; //onlly use small batch to verify
+    int B = 4; //change batch size to verify all sizes
     size_t x_size = B * HIDDEN;
     size_t out_size = B * HIDDEN;
 
@@ -48,7 +48,7 @@ int main() {
     std::vector<float> cpu_after_geglu(B * INTER);
     std::vector<float> cpu_final(B * HIDDEN, 0.0f);
 
-    // 1. GEMM 1: X @ W_combined
+    //gemm 1
     for (int b = 0; b < B; ++b) {
         for (int j = 0; j < 2 * INTER; ++j) {
             float sum = 0.0f;
@@ -59,7 +59,7 @@ int main() {
         }
     }
 
-    // 2. Activation: GeGLU logic
+    //geglu activation
     for (int b = 0; b < B; ++b) {
         for (int i = 0; i < INTER; ++i) {
             float val = cpu_intermediate[b * (2 * INTER) + i];
@@ -68,7 +68,7 @@ int main() {
         }
     }
 
-    // 3. GEMM 2: After_GeGLU @ Wo
+    // 3.gemm 2
     for (int b = 0; b < B; ++b) {
         for (int j = 0; j < HIDDEN; ++j) {
             float sum = 0.0f;
@@ -100,8 +100,6 @@ int main() {
     } else {
         printf("RESULT: FAIL\n");
     }
-
-    // Cleanup
     cudaFree(d_x);
     cudaFree(d_out);
     return 0;
