@@ -1,306 +1,10 @@
-// #include <cuda.h>
-// #include <cuda_runtime.h>
-// #include <cublas_v2.h>
-// #include <math.h>
-// #include <random>
-// #define CUDA_CHECK(call) \
-//     do { \
-//         cudaError_t error = call; \
-//         if (error != cudaSuccess) { \
-//             fprintf(stderr, "CUDA error at %s:%d: %s (%d)\n", __FILE__, __LINE__, \
-//                     cudaGetErrorString(error), error); \
-//             cudaDeviceReset(); \
-//             exit(EXIT_FAILURE); \
-//         } \
-//     } while(0)
-
-// #define CUBLAS_CHECK(call) \
-//     do { \
-//         cublasStatus_t status = call; \
-//         if (status != CUBLAS_STATUS_SUCCESS) { \
-//             fprintf(stderr, "cuBLAS error at %s:%d: %d\n", __FILE__, __LINE__, status); \
-//             exit(EXIT_FAILURE); \
-//         } \
-//     } while(0)
-
-
-// const int HIDDEN = 4096;
-// const int INTER = 12288;
-
-// static cublasHandle_t handle;
-// static bool initialized = false;
-
-// float* Wu = nullptr;
-// float *Wv = nullptr;
-// float *Wo = nullptr;
-
-// float *d_u = nullptr;
-// float *d_v = nullptr;
-// float *d_h = nullptr;
-
-// __device__ __forceinline__ float gelu(float x) {
-//     //tanh approximation used by pytorch
-//     const float c = 0.7978845608f;  //sqrt(2/pi)
-//     const float c1  = 0.044715f;
-//     float x3 = x * x * x;
-//     return 0.5f * x * (1.0f + tanhf(c * (x + c1 * x3)));
-// }
-
-// __global__ void geglu_kernel(const float* u, const float* v, float* h,int n) {
-//     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-//     if (idx < n) {
-//         //float u_val = u[idx];
-//         //float v_val = v[idx];
-//         h[idx] = gelu(u[idx]) * v[idx];
-//     }
-// }
-
-// void initialize_once() {
-//     if (initialized) return;
-
-//     CUBLAS_CHECK(cublasCreate(&handle));
-//     CUDA_CHECK(cudaMalloc(&Wu, HIDDEN * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&Wv, HIDDEN * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&Wo, INTER * HIDDEN * sizeof(float)));
-
-//     const int MAX_B = 128;
-//     CUDA_CHECK(cudaMalloc(&d_u, MAX_B * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&d_v, MAX_B * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&d_h, MAX_B * INTER * sizeof(float)));
-
-//     size_t size_u_v = HIDDEN * INTER;
-//     size_t size_o = INTER * HIDDEN;
-
-//     float *h_Wu = (float*)malloc(size_u_v * sizeof(float));
-//     float *h_Wv = (float*)malloc(size_u_v * sizeof(float));
-//     float *h_Wo = (float*)malloc(size_o * sizeof(float));
-
-//     std::default_random_engine generator(42); //fix seed
-//     float std_dev = sqrt(1.0f / HIDDEN);
-//     std::normal_distribution<float> distribution(0.0f, std_dev);
-
-//     for (size_t i = 0; i < size_u_v; i++) {
-//         h_Wu[i] = distribution(generator);
-//         h_Wv[i] = distribution(generator);
-//     }
-//     for (size_t i = 0; i < size_o; i++) {
-//         h_Wo[i] = distribution(generator);
-//     }
-
-//     CUDA_CHECK(cudaMemcpy(Wu, h_Wu, size_u_v * sizeof(float), cudaMemcpyHostToDevice));
-//     CUDA_CHECK(cudaMemcpy(Wv, h_Wv, size_u_v * sizeof(float), cudaMemcpyHostToDevice));
-//     CUDA_CHECK(cudaMemcpy(Wo, h_Wo, size_o * sizeof(float), cudaMemcpyHostToDevice));
-
-//     free(h_Wu);
-//     free(h_Wv);
-//     free(h_Wo);
-//     initialized = true;
-// }
-
-// void geglu(const float* x, float* out, int B) {
-//     initialize_once();
-//     float alpha = 1.0f;
-//     float beta = 0.0f;
-
-//     float *u, *v, *h;
-//     CUDA_CHECK(cudaMalloc(&u, B * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&v, B * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&h, B * INTER * sizeof(float)));
-
-//     // u = x * Wu
-//     CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, INTER, B, HIDDEN, &alpha, Wu, INTER, x, HIDDEN, &beta, u, INTER));
-
-//     // v = x * Wv
-//     CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, INTER, B, HIDDEN, &alpha,Wv, INTER, x, HIDDEN, &beta, v, INTER));
-    
-//     // h = geglu(u, v)
-//     int n = B * INTER;
-//     int threads = 256;
-//     int blocks = (n + threads - 1) / threads;
-//     geglu_kernel<<<blocks, threads>>>(u, v, h, n);
-//     CUDA_CHECK(cudaGetLastError());
-
-//     // out = h * Wo
-//     CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, HIDDEN, B, INTER, &alpha, Wo, HIDDEN, h, INTER, &beta, out, HIDDEN));
-
-//     // CUDA_CHECK(cudaFree(u));
-//     // CUDA_CHECK(cudaFree(v));
-//     // CUDA_CHECK(cudaFree(h));
-// }
-
-//==============================
-// Trial 2
-//Results
-//GEGLU FFN BENCHMARK
-// Batch Size: 4
-// Average Time over 50 runs: 3.84265 ms
-// Batch Size: 8
-// Average Time over 50 runs: 3.94589 ms
-// Batch Size: 16
-// Average Time over 50 runs: 4.12418 ms
-// Batch Size: 32
-// Average Time over 50 runs: 4.11694 ms
-// Batch Size: 64
-// Average Time over 50 runs: 7.50258 ms
-// Batch Size: 128
-// Average Time over 50 runs: 10.1844 ms
-//==============================
-
-// #include <cuda.h>
-// #include <cuda_runtime.h>
-// #include <cublas_v2.h>
-// #include <math.h>
-// #include <random>
-// #include <stdio.h>
-
-// #define CUDA_CHECK(call) \
-//     do { \
-//         cudaError_t error = call; \
-//         if (error != cudaSuccess) { \
-//             fprintf(stderr, "CUDA error at %s:%d: %s (%d)\n", __FILE__, __LINE__, \
-//                     cudaGetErrorString(error), error); \
-//             cudaDeviceReset(); \
-//             exit(EXIT_FAILURE); \
-//         } \
-//     } while(0)
-
-// #define CUBLAS_CHECK(call) \
-//     do { \
-//         cublasStatus_t status = call; \
-//         if (status != CUBLAS_STATUS_SUCCESS) { \
-//             fprintf(stderr, "cuBLAS error at %s:%d: %d\n", __FILE__, __LINE__, status); \
-//             exit(EXIT_FAILURE); \
-//         } \
-//     } while(0)
-
-// const int HIDDEN = 4096;
-// const int INTER = 12288;
-
-// static cublasHandle_t handle;
-// static bool initialized = false;
-
-// float* Wu = nullptr;
-// float* Wv = nullptr;
-// float* Wo = nullptr;
-
-// // Preallocated buffers
-// float* d_u = nullptr;
-// float* d_v = nullptr;
-// float* d_h = nullptr;
-
-// __device__ __forceinline__ float gelu(float x) {
-//     const float c = 0.7978845608f;  // sqrt(2/pi)
-//     const float c1 = 0.044715f;
-//     float x3 = x * x * x;
-//     return 0.5f * x * (1.0f + tanhf(c * (x + c1 * x3)));
-// }
-
-// // Fused GELU + multiply kernel
-// __global__ void geglu_kernel(const float* u, const float* v, float* h, int n) {
-//     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-//     if (idx < n) {
-//         h[idx] = gelu(u[idx]) * v[idx];
-//     }
-// }
-
-// // Initialize weights and preallocate buffers once
-// void initialize_once() {
-//     if (initialized) return;
-
-//     CUBLAS_CHECK(cublasCreate(&handle));
-
-//     CUDA_CHECK(cudaMalloc(&Wu, HIDDEN * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&Wv, HIDDEN * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&Wo, INTER * HIDDEN * sizeof(float)));
-
-//     const int MAX_B = 128;  // Max batch size
-//     CUDA_CHECK(cudaMalloc(&d_u, MAX_B * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&d_v, MAX_B * INTER * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&d_h, MAX_B * INTER * sizeof(float)));
-
-//     // Initialize host weights
-//     size_t size_u_v = HIDDEN * INTER;
-//     size_t size_o = INTER * HIDDEN;
-
-//     float* h_Wu = (float*)malloc(size_u_v * sizeof(float));
-//     float* h_Wv = (float*)malloc(size_u_v * sizeof(float));
-//     float* h_Wo = (float*)malloc(size_o * sizeof(float));
-
-//     std::default_random_engine generator(42);
-//     float std_dev = sqrt(1.0f / HIDDEN);
-//     std::normal_distribution<float> distribution(0.0f, std_dev);
-
-//     for (size_t i = 0; i < size_u_v; i++) {
-//         h_Wu[i] = distribution(generator);
-//         h_Wv[i] = distribution(generator);
-//     }
-//     for (size_t i = 0; i < size_o; i++) {
-//         h_Wo[i] = distribution(generator);
-//     }
-
-//     CUDA_CHECK(cudaMemcpy(Wu, h_Wu, size_u_v * sizeof(float), cudaMemcpyHostToDevice));
-//     CUDA_CHECK(cudaMemcpy(Wv, h_Wv, size_u_v * sizeof(float), cudaMemcpyHostToDevice));
-//     CUDA_CHECK(cudaMemcpy(Wo, h_Wo, size_o * sizeof(float), cudaMemcpyHostToDevice));
-
-//     free(h_Wu);
-//     free(h_Wv);
-//     free(h_Wo);
-
-//     initialized = true;
-// }
-
-// // Optimized GEGLU FFN
-// void geglu(const float* x, float* out, int B) {
-//     initialize_once();
-
-//     float alpha = 1.0f;
-//     float beta = 0.0f;
-
-//     // 1) Compute u = x @ Wu
-//     CUBLAS_CHECK(cublasSgemm(handle,
-//                              CUBLAS_OP_N, CUBLAS_OP_N,
-//                              INTER, B, HIDDEN,
-//                              &alpha,
-//                              Wu, INTER,
-//                              x, HIDDEN,
-//                              &beta,
-//                              d_u, INTER));
-
-//     // 2) Compute v = x @ Wv
-//     CUBLAS_CHECK(cublasSgemm(handle,
-//                              CUBLAS_OP_N, CUBLAS_OP_N,
-//                              INTER, B, HIDDEN,
-//                              &alpha,
-//                              Wv, INTER,
-//                              x, HIDDEN,
-//                              &beta,
-//                              d_v, INTER));
-
-//     // 3) Apply GELU(u) * v → h
-//     int n = B * INTER;
-//     int threads = 256;
-//     int blocks = (n + threads - 1) / threads;
-//     geglu_kernel<<<blocks, threads>>>(d_u, d_v, d_h, n);
-//     CUDA_CHECK(cudaGetLastError());
-
-//     // 4) Final projection: out = h @ Wo
-//     CUBLAS_CHECK(cublasSgemm(handle,
-//                              CUBLAS_OP_N, CUBLAS_OP_N,
-//                              HIDDEN, B, INTER,
-//                              &alpha,
-//                              Wo, HIDDEN,
-//                              d_h, INTER,
-//                              &beta,
-//                              out, HIDDEN));
-// }
-
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cublas_v2.h>
+#include <cublasLt.h>
 #include <cuda_fp16.h>
-#include <math.h>
-#include <random>
-#include <stdio.h>
+#include <vector>
+#include <iostream>
+#include <cmath>
 
 #define CUDA_CHECK(call) \
     do { \
@@ -308,7 +12,6 @@
         if (error != cudaSuccess) { \
             fprintf(stderr, "CUDA error at %s:%d: %s (%d)\n", __FILE__, __LINE__, \
                     cudaGetErrorString(error), error); \
-            cudaDeviceReset(); \
             exit(EXIT_FAILURE); \
         } \
     } while(0)
@@ -317,7 +20,7 @@
     do { \
         cublasStatus_t status = call; \
         if (status != CUBLAS_STATUS_SUCCESS) { \
-            fprintf(stderr, "cuBLAS error at %s:%d: %d\n", __FILE__, __LINE__, status); \
+            fprintf(stderr, "cuBLAS error at %s:%d: %d\n", __FILE__, __LINE__, (int)status); \
             exit(EXIT_FAILURE); \
         } \
     } while(0)
@@ -325,138 +28,172 @@
 const int HIDDEN = 4096;
 const int INTER = 12288;
 
-static cublasHandle_t handle;
-static bool initialized = false;
+cublasLtHandle_t ltHandle;
+cublasLtMatmulPreference_t preference;
+bool initialized = false;
+bool algos_found = false;
 
-__half *Wu = nullptr;
-__half *Wv = nullptr;
+//gpu pointers
+__half *W_combined = nullptr;
 __half *Wo = nullptr;
-
-// Preallocated buffers for max batch size 128
 __half *d_u = nullptr;
-__half *d_v = nullptr;
 __half *d_h = nullptr;
+void* workspace = nullptr;
+size_t workspaceSize = 1024 * 1024 * 32; //32 mb workspace
 
-// Half-precision GELU using Tensor Core friendly approximation
-__device__ __forceinline__ __half gelu_half(__half x) {
-    // Tanh approximation
-    float xf = __half2float(x);
-    const float c = 0.7978845608f;
-    const float c1 = 0.044715f;
-    float x3 = xf * xf * xf;
-    float y = 0.5f * xf * (1.0f + tanhf(c * (xf + c1 * x3)));
-    return __float2half(y);
-}
+cublasLtMatmulAlgo_t algo_gemm1;
+cublasLtMatmulAlgo_t algo_gemm2;
 
-// Fused GELU(u) * v kernel in half precision
-__global__ void geglu_half_kernel(const __half* u, const __half* v, __half* h, int n) {
+
+__global__ void geglu_kernel(
+    const __half2* __restrict__ input, 
+    __half2* __restrict__ output, 
+    int iter_size_h2, 
+    int batch_stride_h2) 
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        h[idx] = __hmul(gelu_half(u[idx]), v[idx]);
+    int batch_idx = blockIdx.y;
+    
+    if (idx < iter_size_h2) {
+        int base_offset = batch_idx * batch_stride_h2;
+        __half2 val = input[base_offset + idx];
+        __half2 gate = input[base_offset + iter_size_h2 + idx];
+        
+        //approximate gelu x * sigmoid(1.702 * x)
+        const __half2 k1 = __float2half2_rn(1.702f);
+        const __half2 kOne = __float2half2_rn(1.0f);
+        
+        __half2 g_scaled = __hmul2(gate, k1);
+        __half2 neg_g = __hneg2(g_scaled);
+        __half2 exp_val = h2exp(neg_g);
+        __half2 denom = __hadd2(kOne, exp_val);
+        __half2 sigmoid_g = h2rcp(denom);
+        
+        //geglu: val * sigmoid(gate)
+        output[batch_idx * iter_size_h2 + idx] = __hmul2(val, sigmoid_g);
     }
 }
 
-// Initialize weights and buffers
+//helper to init weights on device
+__global__ void init_kernel(__half* data, size_t size, float seed) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        data[idx] = __float2half(sinf(idx + seed) * 0.01f);
+    }
+}
+
+void random_init(__half* data, size_t size) {
+    int threads = 256;
+    int blocks = (size + threads - 1) / threads;
+    init_kernel<<<blocks, threads>>>(data, size, (float)rand());
+}
+
+void find_best_algo(cublasLtMatmulDesc_t operationDesc, cublasLtMatrixLayout_t Adesc, cublasLtMatrixLayout_t Bdesc, cublasLtMatrixLayout_t Cdesc, const void* alpha, const void* beta, const void* A, const void* B, void* C, cublasLtMatmulAlgo_t& bestAlgo) {
+    int returnedResults = 0;
+    const int max_algos = 10;
+    cublasLtMatmulHeuristicResult_t heuristicResults[max_algos];
+
+    CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(
+        ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Cdesc, 
+        preference, max_algos, heuristicResults, &returnedResults
+    ));
+
+    if (returnedResults == 0) {
+        fprintf(stderr, "No cuBLASLt algorithm found!\n");
+        exit(1);
+    }
+    bestAlgo = heuristicResults[0].algo;
+}
+
 void initialize_once() {
     if (initialized) return;
+    
+    CUBLAS_CHECK(cublasLtCreate(&ltHandle));
+    CUDA_CHECK(cudaMalloc(&workspace, workspaceSize));
+    CUBLAS_CHECK(cublasLtMatmulPreferenceCreate(&preference));
+    
+    CUBLAS_CHECK(cublasLtMatmulPreferenceSetAttribute(
+        preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, 
+        &workspaceSize, sizeof(workspaceSize)));
 
-    CUBLAS_CHECK(cublasCreate(&handle));
-
-    CUDA_CHECK(cudaMalloc(&Wu, HIDDEN * INTER * sizeof(__half)));
-    CUDA_CHECK(cudaMalloc(&Wv, HIDDEN * INTER * sizeof(__half)));
-    CUDA_CHECK(cudaMalloc(&Wo, INTER * HIDDEN * sizeof(__half)));
-
-    const int MAX_B = 128;
-    CUDA_CHECK(cudaMalloc(&d_u, MAX_B * INTER * sizeof(__half)));
-    CUDA_CHECK(cudaMalloc(&d_v, MAX_B * INTER * sizeof(__half)));
-    CUDA_CHECK(cudaMalloc(&d_h, MAX_B * INTER * sizeof(__half)));
-
-    size_t size_u_v = HIDDEN * INTER;
-    size_t size_o = INTER * HIDDEN;
-
-    std::vector<float> h_Wu(size_u_v);
-    std::vector<float> h_Wv(size_u_v);
-    std::vector<float> h_Wo(size_o);
-
-    std::default_random_engine generator(42);
-    float std_dev = sqrt(1.0f / HIDDEN);
-    std::normal_distribution<float> dist(0.0f, std_dev);
-
-    for (size_t i = 0; i < size_u_v; i++) {
-        h_Wu[i] = dist(generator);
-        h_Wv[i] = dist(generator);
-    }
-    for (size_t i = 0; i < size_o; i++) {
-        h_Wo[i] = dist(generator);
-    }
-
-    // Convert to __half on device
-    std::vector<__half> hWu_half(size_u_v);
-    std::vector<__half> hWv_half(size_u_v);
-    std::vector<__half> hWo_half(size_o);
-
-    for (size_t i = 0; i < size_u_v; i++) {
-        hWu_half[i] = __float2half(h_Wu[i]);
-        hWv_half[i] = __float2half(h_Wv[i]);
-    }
-    for (size_t i = 0; i < size_o; i++) {
-        hWo_half[i] = __float2half(h_Wo[i]);
-    }
-
-    CUDA_CHECK(cudaMemcpy(Wu, hWu_half.data(), size_u_v * sizeof(__half), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(Wv, hWv_half.data(), size_u_v * sizeof(__half), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(Wo, hWo_half.data(), size_o * sizeof(__half), cudaMemcpyHostToDevice));
-
+    CUDA_CHECK(cudaMalloc(&W_combined, HIDDEN * (2 * INTER) * sizeof(__half)));
+    CUDA_CHECK(cudaMalloc(&Wo, (INTER) * HIDDEN * sizeof(__half)));
+    CUDA_CHECK(cudaMalloc(&d_u, 128 * (2 * INTER) * sizeof(__half))); 
+    CUDA_CHECK(cudaMalloc(&d_h, 128 * INTER * sizeof(__half)));
+    
     initialized = true;
 }
 
-// Optimized GEGLU FFN in half precision using Tensor Cores
 void geglu(const __half* x, __half* out, int B) {
-    initialize_once();
+    if (!initialized) {
+        initialize_once();
+    }
 
-    // GEMM params for half precision with Tensor Cores
-    float alpha_f = 1.0f, beta_f = 0.0f;
+    float alpha = 1.0f;
+    float beta = 0.0f;
 
-    // Compute u = x @ Wu
-    CUBLAS_CHECK(cublasGemmEx(handle,
-                              CUBLAS_OP_N, CUBLAS_OP_N,
-                              INTER, B, HIDDEN,
-                              &alpha_f,
-                              Wu, CUDA_R_16F, INTER,
-                              x, CUDA_R_16F, HIDDEN,
-                              &beta_f,
-                              d_u, CUDA_R_16F, INTER,
-                              CUDA_R_32F,
-                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    //gemm 1: (b, hidden) @ (hidden, 2*inter)
+    cublasLtMatmulDesc_t opDesc;
+    CUBLAS_CHECK(cublasLtMatmulDescCreate(&opDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+    cublasOperation_t opN = CUBLAS_OP_N;
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(opDesc, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN)));
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(opDesc, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN)));
 
-    // Compute v = x @ Wv
-    CUBLAS_CHECK(cublasGemmEx(handle,
-                              CUBLAS_OP_N, CUBLAS_OP_N,
-                              INTER, B, HIDDEN,
-                              &alpha_f,
-                              Wv, CUDA_R_16F, INTER,
-                              x, CUDA_R_16F, HIDDEN,
-                              &beta_f,
-                              d_v, CUDA_R_16F, INTER,
-                              CUDA_R_32F,
-                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    cublasLtMatrixLayout_t xDesc, wDesc, uDesc;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&xDesc, CUDA_R_16F, HIDDEN, B, HIDDEN));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&wDesc, CUDA_R_16F, 2 * INTER, HIDDEN, 2 * INTER));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&uDesc, CUDA_R_16F, 2 * INTER, B, 2 * INTER));
 
-    // Fused GELU(u) * v
-    int n = B * INTER;
-    int threads = 256;
-    int blocks = (n + threads - 1) / threads;
-    geglu_half_kernel<<<blocks, threads>>>(d_u, d_v, d_h, n);
-    CUDA_CHECK(cudaGetLastError());
+    if (!algos_found) {
+        find_best_algo(opDesc, wDesc, xDesc, uDesc, &alpha, &beta, W_combined, x, d_u, algo_gemm1);
+    }
 
-    // Final projection: out = h @ Wo using Tensor Cores
-    CUBLAS_CHECK(cublasGemmEx(handle,
-                              CUBLAS_OP_N, CUBLAS_OP_N,
-                              HIDDEN, B, INTER,
-                              &alpha_f,
-                              Wo, CUDA_R_16F, HIDDEN,
-                              d_h, CUDA_R_16F, INTER,
-                              &beta_f,
-                              out, CUDA_R_16F, HIDDEN,
-                              CUDA_R_32F,
-                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    CUBLAS_CHECK(cublasLtMatmul(
+        ltHandle, opDesc, &alpha, W_combined, wDesc, x, xDesc, &beta, d_u, uDesc, d_u, uDesc, 
+        &algo_gemm1, workspace, workspaceSize, 0));
+
+    //
+    int iter_size_h2 = INTER / 2;
+    int batch_stride_h2 = (2 * INTER) / 2;
+    dim3 threads(256);
+    dim3 blocks((iter_size_h2 + threads.x - 1) / threads.x, B);
+
+    geglu_kernel<<<blocks, threads>>>(
+        (const __half2*)d_u, (__half2*)d_h, iter_size_h2, batch_stride_h2
+    );
+
+    //gemm 2: (B, Inter) @ (inter, hidden)
+    cublasLtMatrixLayout_t hDesc, woDesc, outDesc;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&hDesc, CUDA_R_16F, INTER, B, INTER));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&woDesc, CUDA_R_16F, HIDDEN, INTER, HIDDEN));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&outDesc, CUDA_R_16F, HIDDEN, B, HIDDEN));
+
+    if (!algos_found) {
+        find_best_algo(opDesc, woDesc, hDesc, outDesc, &alpha, &beta, Wo, d_h, out, algo_gemm2);
+        algos_found = true; 
+    }
+
+    CUBLAS_CHECK(cublasLtMatmul(
+        ltHandle, opDesc, &alpha, Wo, woDesc, d_h, hDesc, &beta, out, outDesc, out, outDesc, 
+        &algo_gemm2, workspace, workspaceSize, 0
+    ));
+
+    // Cleanup Descriptors
+    cublasLtMatmulDescDestroy(opDesc);
+    cublasLtMatrixLayoutDestroy(xDesc); 
+    cublasLtMatrixLayoutDestroy(wDesc); 
+    cublasLtMatrixLayoutDestroy(uDesc);
+    cublasLtMatrixLayoutDestroy(hDesc); 
+    cublasLtMatrixLayoutDestroy(woDesc); 
+    cublasLtMatrixLayoutDestroy(outDesc);
+}
+
+void cleanup() {
+    CUDA_CHECK(cudaFree(W_combined));
+    CUDA_CHECK(cudaFree(Wo));
+    CUDA_CHECK(cudaFree(d_u));
+    CUDA_CHECK(cudaFree(d_h));
+    CUDA_CHECK(cudaFree(workspace));
+    CUBLAS_CHECK(cublasLtMatmulPreferenceDestroy(preference));
+    CUBLAS_CHECK(cublasLtDestroy(ltHandle));
 }

@@ -1,12 +1,22 @@
 NVCC = nvcc
 CXXFLAGS = -O3 -std=c++17
-LDFLAGS = -lcublas
-
-TARGET = geglu_ffn
-SRCS = ffn.cpp ffn.cu
+LDFLAGS = -lcublas -lcublasLt
 ARCH = -arch=sm_86
-all:
-	$(NVCC) $(CXXFLAGS) $(SRCS) -o $(TARGET) $(ARCH) $(LDFLAGS)
+
+BENCHMARK_TARGET = run_benchmark
+VERIFY_TARGET = run_verify
+
+KERNEL_SRC = ffn.cu
+BENCHMARK_SRC = benchmark.cpp
+VERIFY_SRC = verification.cpp
+
+all: $(BENCHMARK_TARGET) $(VERIFY_TARGET)
+
+$(BENCHMARK_TARGET): $(BENCHMARK_SRC) $(KERNEL_SRC)
+	$(NVCC) $(CXXFLAGS) $(BENCHMARK_SRC) $(KERNEL_SRC) -o $(BENCHMARK_TARGET) $(ARCH) $(LDFLAGS)
+
+$(VERIFY_TARGET): $(VERIFY_SRC) $(KERNEL_SRC)
+	$(NVCC) $(CXXFLAGS) $(VERIFY_SRC) $(KERNEL_SRC) -o $(VERIFY_TARGET) $(ARCH) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(BENCHMARK_TARGET) $(VERIFY_TARGET)
